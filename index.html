@@ -698,7 +698,7 @@
 // ============================================================
 //  CONFIG
 // ============================================================
-const API_BASE = 'https://api.71lbs.com';
+const API_BASE = 'http://dashboard.71lbs.com/api-queries/labels';
 const API_KEY  = '';
 
 // ============================================================
@@ -1062,20 +1062,29 @@ async function fetchRate(s) {
     await new Promise(r => setTimeout(r, 250+Math.random()*400));
     return estimateRate(s);
   }
-  const resp = await fetch(`${API_BASE}/v1/rates`, {
+  const resp = await fetch(`${API_BASE}/external_rates/`, {
     method:'POST',
-    headers:{'Authorization':`Bearer ${API_KEY}`,'Content-Type':'application/json'},
+    headers:{'api-Token': API_KEY, 'Content-Type':'application/json'},
     body:JSON.stringify({
-      origin_zip:s.originZip||'90001', dest_zip:s.destZip||'10001',
-      weight:s.weight, service:s.serviceType,
-      length:parseInt(s.dimensions?.split('x')[0])||12,
-      width:parseInt(s.dimensions?.split('x')[1])||9,
-      height:parseInt(s.dimensions?.split('x')[2])||5,
+      shipper_name:'Shipper', shipper_company_name:'Company',
+      shipper_address_line_1:'100 Main St', shipper_city:s.originCity||'Los Angeles',
+      shipper_state:s.originState||'CA', shipper_postal:s.originZip||'90001',
+      shipper_country:'US', shipper_phone_number:'5555555555', shipper_email:'ship@example.com',
+      recipient_name:'Recipient', recipient_company_name:'Recipient Co',
+      recipient_address_line_1:'200 Oak Ave', recipient_city:s.destCity||'New York',
+      recipient_state:s.destState||'NY', recipient_postal:s.destZip||'10001',
+      recipient_country:'US', recipient_phone_number:'5555555556', recipient_email:'recv@example.com',
+      package_weight: String(s.weight),
+      package_length: String(parseInt(s.dimensions?.split('x')[0])||12),
+      package_width:  String(parseInt(s.dimensions?.split('x')[1])||9),
+      package_height: String(parseInt(s.dimensions?.split('x')[2])||5),
     }),
   });
   if (!resp.ok) throw new Error(`${resp.status}`);
   const data = await resp.json();
-  return { rate: data.total_charge || data.rate || estimateRate(s).rate };
+  const rates = data.data || [];
+  const match = rates.find(r => r.service?.toLowerCase().includes(s.serviceType?.toLowerCase())) || rates[0];
+  return { rate: match ? parseFloat(match.rate) : estimateRate(s).rate };
 }
 
 function estimateRate(s) {
