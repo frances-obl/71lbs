@@ -1106,7 +1106,7 @@ function updateSelectionUI() {
   document.getElementById('selection-bar').style.width = `${Math.min((n/5)*100,100)}%`;
   document.getElementById('selection-label').textContent = n===5 ? 'ready!' : 'selected';
   document.getElementById('selection-label').style.color = n===5 ? 'var(--green)' : 'var(--gray-400)';
-  document.getElementById('reprice-btn').disabled = n !== 6;
+  document.getElementById('reprice-btn').disabled = n !== 5;
 }
 
 // ============================================================
