@@ -892,26 +892,33 @@ async function handleFile(file) {
 async function extractPdfText(buffer) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
-  let text = '';
+  const LINE_TOLERANCE = 5;
+  let lines = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const viewport = page.getViewport({ scale: 1 });
-    const LINE_TOLERANCE = 5;
-    const items = content.items
+    // Assign each text item a row bucket based on Y position
+    const itemsWithRow = content.items
       .filter(item => item.str.trim())
       .map(item => ({
         str: item.str,
         x: item.transform[4],
-        y: viewport.height - item.transform[5],
-      }))
-      .sort((a, b) => {
-        const rowDiff = Math.round(a.y / LINE_TOLERANCE) - Math.round(b.y / LINE_TOLERANCE);
-        return rowDiff !== 0 ? rowDiff : a.x - b.x;
-      });
-    text += items.map(item => item.str).join(' ') + '\n';
+        rowKey: Math.round((viewport.height - item.transform[5]) / LINE_TOLERANCE),
+      }));
+    // Group into visual rows, then sort rows top-to-bottom, items left-to-right
+    const rowMap = new Map();
+    for (const item of itemsWithRow) {
+      if (!rowMap.has(item.rowKey)) rowMap.set(item.rowKey, []);
+      rowMap.get(item.rowKey).push(item);
+    }
+    const sortedRows = [...rowMap.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, items]) => items.sort((a, b) => a.x - b.x).map(i => i.str).join(' '));
+    lines = lines.concat(sortedRows);
   }
-  return text;
+  // One line per visual row across all pages — no page-boundary resets
+  return lines.join('\n');
 }
 
 function parseShipments(text) {
