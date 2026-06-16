@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>71lbs — Shipping Savings Specialist</title>
+  <title>71lbs — Shipping Savings Specialist v6</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -929,57 +929,59 @@ function parseShipments(text) {
   const found = new Set();
   const lines = text.split('\n');
 
-  // Match only lines that introduce a new shipment via a "Tracking ID/Number/#" label.
-  // "continued" lines (page-wrap carry-overs) are skipped so we don't double-count.
-  const trackingLabelRx = /\b(?:tracking\s+(?:id|number|#)\s*:?)\s/i;
-  const trackNumRx      = /\b(1Z[A-Z0-9]{16}|\d{12}|\d{15}|\d{20,22})\b/;
-  const totalChargeRx   = /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b/i;
-  const dollarRx        = /\$\s*(\d{1,6}\.\d{2})/;
-  const refPat          = /(?:cust\.?\s*ref\.?|matter\s*\/?\s*client|customer\s*ref(?:erence)?)\s*[:\-]?\s*([A-Za-z0-9\-\/\._]{2,40})/i;
-  const weightPat       = /\b(\d+\.?\d*)\s*(?:lbs?|lb|LBS?)\b/i;
-  const datePat         = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/i;
+  const trackNumGlob = /\b(1Z[A-Z0-9]{16}|\d{12}|\d{15}|\d{20,22})\b/g;
+  const totalChargeRx = /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b/i;
+  const dollarRx      = /\$\s*(\d{1,6}\.\d{2})/;
+  const refPat        = /(?:cust\.?\s*ref\.?|matter\s*\/?\s*client|customer\s*ref(?:erence)?)\s*[:\-]?\s*([A-Za-z0-9\-\/\._]{2,40})/i;
+  const weightPat     = /\b(\d+\.?\d*)\s*(?:lbs?|lb|LBS?)\b/i;
+  const datePat       = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/i;
 
+  // Pass 1: record first occurrence of each tracking number in document order.
+  // Skip lines containing "continued" — those are page-wrap duplicates.
+  const trackPositions = [];
   for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
+    if (/\bcontinued\b/i.test(lines[li])) continue;
+    for (const tm of [...lines[li].matchAll(trackNumGlob)]) {
+      const tn = tm[1];
+      if (!found.has(tn)) {
+        found.add(tn);
+        trackPositions.push({ lineIdx: li, tn });
+      }
+    }
+  }
 
-    // Must have a tracking label and must not be a "continued" carry-over line
-    if (!trackingLabelRx.test(line)) continue;
-    if (/\bcontinued\b/i.test(line)) continue;
+  // Pass 2: for each tracking number, scan forward within its block
+  // (from its line up to the next tracking number's line) and find
+  // "Total Charge" — the $ amount on that line is the billed total.
+  for (let i = 0; i < trackPositions.length; i++) {
+    const { lineIdx, tn } = trackPositions[i];
+    const blockEnd = trackPositions[i + 1]
+      ? trackPositions[i + 1].lineIdx
+      : Math.min(lineIdx + 60, lines.length);
 
-    const tnMatch = line.match(trackNumRx);
-    if (!tnMatch) continue;
-    const tn = tnMatch[1];
-    if (found.has(tn)) continue;
-    found.add(tn);
-
-    // Scan forward line-by-line for "Total Charge" and pull the $ amount.
-    // Stop as soon as the next non-continued tracking label appears.
     let currentCost = 0;
-    for (let j = li + 1; j < lines.length && j < li + 60; j++) {
+    for (let j = lineIdx + 1; j < blockEnd; j++) {
       const jl = lines[j];
-      if (trackingLabelRx.test(jl) && !/\bcontinued\b/i.test(jl)) break;
       if (totalChargeRx.test(jl)) {
-        // Amount is on the same line (FedEx: "Total Charge USD $34.81")
         const m = jl.match(dollarRx);
         if (m) { currentCost = parseFloat(m[1]); break; }
-        // Amount may be on the very next line
-        if (j + 1 < lines.length) {
+        // Label and amount on consecutive lines
+        if (j + 1 < blockEnd) {
           const m2 = lines[j + 1].match(dollarRx);
           if (m2) { currentCost = parseFloat(m2[1]); break; }
         }
       }
     }
 
-    // Pull supplemental fields from a 20-line context window
-    const ctx = lines.slice(li, Math.min(li + 20, lines.length)).join(' ');
+    const ctx = lines.slice(lineIdx, Math.min(lineIdx + 20, lines.length)).join(' ');
     const refMatch    = ctx.match(refPat);
     const weightMatch = ctx.match(weightPat);
     const dateMatch   = ctx.match(datePat);
 
     shipments.push({
       id: tn, trackingNumber: tn,
-      custRef:   refMatch    ? refMatch[1].trim()        : '—',
-      shipDate:  dateMatch   ? dateMatch[0].trim()       : '—',
+      custRef:    refMatch    ? refMatch[1].trim()  : '—',
+      shipDate:   dateMatch   ? dateMatch[0].trim() : '—',
       originCity: '', originState: '', originZip: '', originAddress: '',
       destCity:   '', destState:   '', destZip:   '', destAddress:   '',
       serviceType: detectService(ctx),
