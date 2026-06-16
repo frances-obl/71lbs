@@ -614,6 +614,9 @@
         View shipment details
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
       </button>
+      <button class="btn-ghost" onclick="debugDownload()" style="padding:10px 16px;font-size:12px;color:#94a3b8;">
+        Debug: download extracted text
+      </button>
     </div>
 
   </div>
@@ -901,15 +904,13 @@ async function extractPdfText(buffer) {
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const viewport = page.getViewport({ scale: 1 });
-    // Assign each text item a row bucket based on Y position
     const itemsWithRow = content.items
-      .filter(item => item.str.trim())
+      .filter(item => item.str && item.str.trim())
       .map(item => ({
         str: item.str,
         x: item.transform[4],
         rowKey: Math.round((viewport.height - item.transform[5]) / LINE_TOLERANCE),
       }));
-    // Group into visual rows, then sort rows top-to-bottom, items left-to-right
     const rowMap = new Map();
     for (const item of itemsWithRow) {
       if (!rowMap.has(item.rowKey)) rowMap.set(item.rowKey, []);
@@ -920,63 +921,64 @@ async function extractPdfText(buffer) {
       .map(([, items]) => items.sort((a, b) => a.x - b.x).map(i => i.str).join(' '));
     lines = lines.concat(sortedRows);
   }
-  // One line per visual row across all pages — no page-boundary resets
-  return lines.join('\n');
+  const result = lines.join('\n');
+  // Store for debug download
+  window._lastExtractedText = result;
+  return result;
+}
+
+function debugDownload() {
+  if (!window._lastExtractedText) { alert('Upload a PDF first.'); return; }
+  const blob = new Blob([window._lastExtractedText], { type: 'text/plain' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'extracted.txt'; a.click();
 }
 
 function parseShipments(text) {
-  const shipments = [];
-  const found = new Set();
-  const lines = text.split('\n');
+  // Flatten to a single string — works regardless of how PDF.js organises
+  // text items into lines (one-per-page, one-per-row, or anything else).
+  // All whitespace runs collapse to a single space so regexes are predictable.
+  const flat = text.replace(/\s+/g, ' ');
 
   const trackNumGlob = /\b(1Z[A-Z0-9]{16}|\d{12}|\d{15}|\d{20,22})\b/g;
-  const totalChargeRx = /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b/i;
-  const dollarRx      = /\$\s*(\d{1,6}\.\d{2})/;
-  const refPat        = /(?:cust\.?\s*ref\.?|matter\s*\/?\s*client|customer\s*ref(?:erence)?)\s*[:\-]?\s*([A-Za-z0-9\-\/\._]{2,40})/i;
-  const weightPat     = /\b(\d+\.?\d*)\s*(?:lbs?|lb|LBS?)\b/i;
-  const datePat       = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/i;
+  const refPat       = /(?:cust\.?\s*ref\.?|matter\s*\/?\s*client|customer\s*ref(?:erence)?)\s*[:\-]?\s*([A-Za-z0-9\-\/\._]{2,40})/i;
+  const weightPat    = /\b(\d+\.?\d*)\s*(?:lbs?|lb|LBS?)\b/i;
+  const datePat      = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b/i;
 
-  // Pass 1: record first occurrence of each tracking number in document order.
-  // Skip lines containing "continued" — those are page-wrap duplicates.
-  const trackPositions = [];
-  for (let li = 0; li < lines.length; li++) {
-    if (/\bcontinued\b/i.test(lines[li])) continue;
-    for (const tm of [...lines[li].matchAll(trackNumGlob)]) {
-      const tn = tm[1];
-      if (!found.has(tn)) {
-        found.add(tn);
-        trackPositions.push({ lineIdx: li, tn });
-      }
+  // Pass 1 — collect every unique tracking number and its position in the
+  // flat string, skipping any occurrence that is immediately followed by
+  // the word "continued" (page-wrap duplicate).
+  const found = new Set();
+  const trackMatches = [];
+  for (const tm of [...flat.matchAll(trackNumGlob)]) {
+    const tn = tm[1];
+    const after = flat.slice(tm.index + tn.length, tm.index + tn.length + 40);
+    if (/\bcontinued\b/i.test(after)) continue;
+    if (!found.has(tn)) {
+      found.add(tn);
+      trackMatches.push({ tn, pos: tm.index });
     }
   }
 
-  // Pass 2: for each tracking number, scan forward within its block
-  // (from its line up to the next tracking number's line) and find
-  // "Total Charge" — the $ amount on that line is the billed total.
-  for (let i = 0; i < trackPositions.length; i++) {
-    const { lineIdx, tn } = trackPositions[i];
-    const blockEnd = trackPositions[i + 1]
-      ? trackPositions[i + 1].lineIdx
-      : Math.min(lineIdx + 60, lines.length);
+  // Pass 2 — for each tracking number, its "block" is the substring from its
+  // position to the start of the next tracking number (or +3000 chars).
+  // Within that block, find "Total Charge … $XX.XX".
+  // The regex allows any characters between the label and the dollar amount
+  // so it works whether they are on the same token-row or different rows.
+  const shipments = [];
+  for (let i = 0; i < trackMatches.length; i++) {
+    const { tn, pos } = trackMatches[i];
+    const blockEnd  = trackMatches[i + 1] ? trackMatches[i + 1].pos : pos + 3000;
+    const block     = flat.slice(pos, blockEnd);
 
-    let currentCost = 0;
-    for (let j = lineIdx + 1; j < blockEnd; j++) {
-      const jl = lines[j];
-      if (totalChargeRx.test(jl)) {
-        const m = jl.match(dollarRx);
-        if (m) { currentCost = parseFloat(m[1]); break; }
-        // Label and amount on consecutive lines
-        if (j + 1 < blockEnd) {
-          const m2 = lines[j + 1].match(dollarRx);
-          if (m2) { currentCost = parseFloat(m2[1]); break; }
-        }
-      }
-    }
+    const chargeMatch = block.match(
+      /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b[\s\S]{0,60}?\$\s*(\d{1,6}\.\d{2})/i
+    );
+    const currentCost = chargeMatch ? parseFloat(chargeMatch[1]) : 0;
 
-    const ctx = lines.slice(lineIdx, Math.min(lineIdx + 20, lines.length)).join(' ');
-    const refMatch    = ctx.match(refPat);
-    const weightMatch = ctx.match(weightPat);
-    const dateMatch   = ctx.match(datePat);
+    const refMatch    = block.match(refPat);
+    const weightMatch = block.match(weightPat);
+    const dateMatch   = block.match(datePat);
 
     shipments.push({
       id: tn, trackingNumber: tn,
@@ -984,11 +986,10 @@ function parseShipments(text) {
       shipDate:   dateMatch   ? dateMatch[0].trim() : '—',
       originCity: '', originState: '', originZip: '', originAddress: '',
       destCity:   '', destState:   '', destZip:   '', destAddress:   '',
-      serviceType: detectService(ctx),
-      packageType: detectPkgType(ctx),
+      serviceType: detectService(block),
+      packageType: detectPkgType(block),
       weight:      weightMatch ? parseFloat(weightMatch[1]) : 0,
-      dimensions: '',
-      zone: 0,
+      dimensions: '', zone: 0,
       currentCost: parseFloat(currentCost.toFixed(2)),
     });
   }
