@@ -919,34 +919,81 @@ function parseShipments(text) {
   const trackPat  = /\b(1Z[A-Z0-9]{16}|\d{12}|\d{15}|\d{20,22})\b/g;
   const datePat   = /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/;
   const weightPat = /\b(\d+\.?\d*)\s*(?:lbs?|lb|LBS?)\b/i;
-  const costPat   = /\$\s*(\d+\.?\d*)/g;
   const refPat    = /(?:cust\.?\s*ref\.?|matter\s*\/?\s*client|customer\s*ref(?:erence)?|reference\s*(?:no\.?|#|num\.?)?)\s*[:\-]?\s*([A-Za-z0-9\-\/\._]{2,40})/i;
 
   const lines = text.split(/\n|\r/);
+
+  // First pass: collect all tracking number positions in document order
+  const trackPositions = [];
   for (let li = 0; li < lines.length; li++) {
-    const line = lines[li];
-    for (const tm of [...line.matchAll(trackPat)]) {
+    for (const tm of [...lines[li].matchAll(trackPat)]) {
       const tn = tm[1];
-      if (found.has(tn)) continue;
-      found.add(tn);
-
-      const window = lines.slice(Math.max(0, li - 4), Math.min(lines.length, li + 5)).join(' ');
-      const refMatch = window.match(refPat);
-      const custRef = refMatch ? refMatch[1].trim() : '—';
-
-      const costs = [...line.matchAll(costPat)].map(m => parseFloat(m[1]));
-      shipments.push({
-        id:tn, trackingNumber:tn,
-        custRef,
-        shipDate:(line.match(datePat)||[,'—'])[1],
-        originCity:'', originState:'', originZip:'', originAddress:'',
-        destCity:'', destState:'', destZip:'', destAddress:'',
-        serviceType:detectService(window), packageType:detectPkgType(window),
-        weight:parseFloat(((window.match(weightPat)||[,null])[1])||(1+Math.random()*10).toFixed(1)),
-        dimensions:'', zone:Math.floor(2+Math.random()*6),
-        currentCost:parseFloat((costs.length?Math.max(...costs):10+Math.random()*40).toFixed(2)),
-      });
+      if (!found.has(tn)) {
+        found.add(tn);
+        trackPositions.push({ lineIdx: li, tn });
+      }
     }
+  }
+
+  // Second pass: for each tracking number, parse the block from its line
+  // up to (but not including) the next tracking number's line.
+  // FedEx/UPS invoices group all shipment details — including total charge —
+  // in a contiguous block before the next shipment begins.
+  for (let i = 0; i < trackPositions.length; i++) {
+    const { lineIdx, tn } = trackPositions[i];
+    const nextLineIdx = trackPositions[i + 1]
+      ? trackPositions[i + 1].lineIdx
+      : Math.min(lineIdx + 40, lines.length);
+
+    const blockLines = lines.slice(lineIdx, nextLineIdx);
+    const block = blockLines.join(' ');
+
+    // Cost extraction priority:
+    // 1. Labeled total ("Net Charge", "Total Charge", "Billed Amount", etc.)
+    // 2. Last dollar-sign amount in the block (consistently the shipment total in FedEx/UPS format)
+    // 3. Last bare decimal in the block (invoices without $ prefix)
+    // 4. 0 — no hallucinations, no random fallback
+    let currentCost = 0;
+    const labeledChargePat = /(?:net\s+charge|total\s+charge|billed\s+(?:charge|amount)|amount\s+billed|transportation\s+charge|total\s+amount\s+due)\s*[:\$]?\s*(\d{1,6}\.\d{2})/i;
+    const labeledMatch = block.match(labeledChargePat);
+    if (labeledMatch) {
+      currentCost = parseFloat(labeledMatch[1]);
+    } else {
+      const dollarAmounts = [...block.matchAll(/\$\s*(\d{1,6}\.\d{2})/g)]
+        .map(m => parseFloat(m[1]))
+        .filter(v => v > 0);
+      if (dollarAmounts.length) {
+        currentCost = dollarAmounts[dollarAmounts.length - 1];
+      } else {
+        const bareAmounts = [...block.matchAll(/\b(\d{1,4}\.\d{2})\b/g)]
+          .map(m => parseFloat(m[1]))
+          .filter(v => v >= 1 && v < 10000);
+        if (bareAmounts.length) {
+          currentCost = bareAmounts[bareAmounts.length - 1];
+        }
+      }
+    }
+
+    const refMatch = block.match(refPat);
+    const custRef = refMatch ? refMatch[1].trim() : '—';
+    const weightMatch = block.match(weightPat);
+    const weight = weightMatch ? parseFloat(weightMatch[1]) : 0;
+    const dateMatch = block.match(datePat);
+    const shipDate = dateMatch ? dateMatch[1] : '—';
+
+    shipments.push({
+      id: tn, trackingNumber: tn,
+      custRef,
+      shipDate,
+      originCity: '', originState: '', originZip: '', originAddress: '',
+      destCity: '', destState: '', destZip: '', destAddress: '',
+      serviceType: detectService(block),
+      packageType: detectPkgType(block),
+      weight,
+      dimensions: '',
+      zone: 0,
+      currentCost: parseFloat(currentCost.toFixed(2)),
+    });
   }
   return shipments;
 }
