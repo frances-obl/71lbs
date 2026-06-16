@@ -357,7 +357,7 @@
       <div class="reveal d2" style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:18px;padding:36px 28px;">
         <div style="width:46px;height:46px;border-radius:12px;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;margin-bottom:22px;">2</div>
         <h3 style="font-size:1.2rem;font-weight:700;color:#0f172a;margin:0 0 10px;letter-spacing:-0.01em;">We reprice your shipments</h3>
-        <p style="font-size:14.5px;color:var(--gray-600);line-height:1.7;margin:0;">Pick at least five shipments and our engine queries live 71lbs rates against what you're paying today.</p>
+        <p style="font-size:14.5px;color:var(--gray-600);line-height:1.7;margin:0;">Pick five shipments and our engine queries live 71lbs rates against what you're paying today.</p>
       </div>
       <div class="reveal d3" style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:18px;padding:36px 28px;">
         <div style="width:46px;height:46px;border-radius:12px;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;margin-bottom:22px;">3</div>
@@ -500,7 +500,7 @@
              onerror="this.style.display='none'"
              style="height:28px;width:auto;" alt="71lbs" />
         <div>
-          <h2 style="font-size:1rem;font-weight:700;color:var(--blue);margin:0 0 2px;letter-spacing:-0.01em;">Select 5+ shipments to reprice</h2>
+          <h2 style="font-size:1rem;font-weight:700;color:var(--blue);margin:0 0 2px;letter-spacing:-0.01em;">Select 5 shipments to reprice</h2>
           <p id="invoice-meta" style="font-size:12px;color:var(--gray-400);margin:0;"></p>
         </div>
       </div>
@@ -591,12 +591,12 @@
       <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:12px;padding:20px 16px;">
         <p style="font-size:11px;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px;">Current Cost</p>
         <p id="result-current" style="font-size:1.5rem;font-weight:800;color:var(--gray-800);letter-spacing:-0.02em;">$0</p>
-        <p style="font-size:11px;color:var(--gray-400);margin-top:4px;">5+ shipments</p>
+        <p style="font-size:11px;color:var(--gray-400);margin-top:4px;">5 shipments</p>
       </div>
       <div style="background:var(--blue-pale);border:1px solid var(--blue-mid);border-radius:12px;padding:20px 16px;">
         <p style="font-size:11px;color:var(--blue);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px;">71lbs Cost</p>
         <p id="result-71lbs" style="font-size:1.5rem;font-weight:800;color:var(--blue);letter-spacing:-0.02em;">$0</p>
-        <p style="font-size:11px;color:#64b5f6;margin-top:4px;">5+ shipments</p>
+        <p style="font-size:11px;color:#64b5f6;margin-top:4px;">5 shipments</p>
       </div>
       <div style="background:var(--green-pale);border:1px solid #bbf7d0;border-radius:12px;padding:20px 16px;">
         <p style="font-size:11px;color:var(--green);text-transform:uppercase;letter-spacing:0.06em;font-weight:600;margin-bottom:8px;">Annual Est.</p>
@@ -1090,7 +1090,7 @@ function toggleRow(id) {
   if (selectedIds.has(id)) {
     selectedIds.delete(id);
   } else {
-    if (selectedIds.size >= 6) { showToast('Maximum 6 selected — deselect one first.', 'error'); return; }
+    if (selectedIds.size >= 5) { showToast('Maximum 5 selected — deselect one first.', 'error'); return; }
     selectedIds.add(id);
   }
   const tr = document.querySelector(`tr[data-id="${id}"]`);
@@ -1103,9 +1103,9 @@ function toggleRow(id) {
 function updateSelectionUI() {
   const n = selectedIds.size;
   document.getElementById('selected-count').textContent = n;
-  document.getElementById('selection-bar').style.width = `${Math.min((n/6)*100,100)}%`;
-  document.getElementById('selection-label').textContent = n>=5 ? 'ready!' : 'selected';
-  document.getElementById('selection-label').style.color = n>=5 ? 'var(--green)' : 'var(--gray-400)';
+  document.getElementById('selection-bar').style.width = `${Math.min((n/5)*100,100)}%`;
+  document.getElementById('selection-label').textContent = n===5 ? 'ready!' : 'selected';
+  document.getElementById('selection-label').style.color = n===5 ? 'var(--green)' : 'var(--gray-400)';
   document.getElementById('reprice-btn').disabled = n !== 6;
 }
 
@@ -1113,7 +1113,7 @@ function updateSelectionUI() {
 //  REPRICE
 // ============================================================
 async function repriceSelected() {
-  if (selectedIds.size < 5) return;
+  if (selectedIds.size !== 5) return;
   const selected = parsedShipments.filter(s => selectedIds.has(s.id));
   document.getElementById('loading-overlay').style.display = 'flex';
   try {
