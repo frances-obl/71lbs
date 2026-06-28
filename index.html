@@ -965,19 +965,42 @@ function parseShipments(text) {
   // Within that block, find "Total Charge … $XX.XX".
   // The regex allows any characters between the label and the dollar amount
   // so it works whether they are on the same token-row or different rows.
+  // UPS WorldShip-style delivery invoices print each shipment row as:
+  //   <tn> <service...> <zip> <zone> <weight> <published> <-credit> <billed>
+  // followed later by a summary line: Total <published> <-credit> <billed>
+  // No "$" prefix and no "Total Charge" label, so it needs its own patterns.
+  const upsHeaderPat = /(\d{5})(?:-\d{4})?\s+(\d{1,2})\s+(\d+\.?\d*)\s+\d+\.\d{2}\s+-?\d+\.\d{2}\s+\d+\.\d{2}/;
+  const upsTotalPat  = /\bTotal\s+\d+\.\d{2}\s+-?\d+\.\d{2}\s+(\d+\.\d{2})\b/;
+
   const shipments = [];
   for (let i = 0; i < trackMatches.length; i++) {
     const { tn, pos } = trackMatches[i];
     const blockEnd  = trackMatches[i + 1] ? trackMatches[i + 1].pos : pos + 3000;
     const block     = flat.slice(pos, blockEnd);
+    const isUPS     = /^1Z/i.test(tn);
 
-    const chargeMatch = block.match(
-      /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b[\s\S]{0,60}?\$\s*(\d{1,6}\.\d{2})/i
-    );
-    const currentCost = chargeMatch ? parseFloat(chargeMatch[1]) : 0;
+    let currentCost = 0;
+    let zone = 0;
+    let weight = 0;
+
+    if (isUPS) {
+      const totalMatch  = block.match(upsTotalPat);
+      currentCost = totalMatch ? parseFloat(totalMatch[1]) : 0;
+      const headerMatch = block.match(upsHeaderPat);
+      if (headerMatch) {
+        zone   = parseInt(headerMatch[2], 10);
+        weight = parseFloat(headerMatch[3]);
+      }
+    } else {
+      const chargeMatch = block.match(
+        /\b(?:total\s+charge|total\s+shipment\s+charge|amount\s+charged|net\s+charge)\b[\s\S]{0,60}?\$\s*(\d{1,6}\.\d{2})/i
+      );
+      currentCost = chargeMatch ? parseFloat(chargeMatch[1]) : 0;
+      const weightMatch = block.match(weightPat);
+      weight = weightMatch ? parseFloat(weightMatch[1]) : 0;
+    }
 
     const refMatch    = block.match(refPat);
-    const weightMatch = block.match(weightPat);
     const dateMatch   = block.match(datePat);
 
     shipments.push({
@@ -988,8 +1011,8 @@ function parseShipments(text) {
       destCity:   '', destState:   '', destZip:   '', destAddress:   '',
       serviceType: detectService(block),
       packageType: detectPkgType(block),
-      weight:      weightMatch ? parseFloat(weightMatch[1]) : 0,
-      dimensions: '', zone: 0,
+      weight,
+      dimensions: '', zone,
       currentCost: parseFloat(currentCost.toFixed(2)),
     });
   }
